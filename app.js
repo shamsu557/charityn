@@ -10,7 +10,6 @@ const session = require("express-session");
 const PDFDocument = require('pdfkit');
 
 const app = express();
-
 app.use(
   session({
     secret: "a45A7ZMpVby14qNkWxlSwYGaSUv1d64x",
@@ -18,10 +17,11 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      maxAge: 60 * 60 * 1000, // 1 hour session expiration
+      maxAge: 2 * 60 * 1000, // 30 minutes session expiration 
     },
   })
 );
+
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
@@ -142,16 +142,94 @@ app.post("/donate", (req, res) => {
   });
 });
 
-// Admin login route
-app.post("/admin_login", (req, res) => {
+// Serve the creation page (creation.html)
+app.get('/creation', (req, res) => {
+  res.sendFile(path.join(__dirname, 'creation.html'));
+});
+// Admin login route (for validating the admin before showing the signup form)
+app.post('/admin_create_login', (req, res) => {
   const { username, password } = req.body;
 
-  if (username === 'Admin' && password === 'Admin') {
-    req.session.isAdminLoggedIn = true;
-    return res.status(200).send('Logged in');
-  } else {
-    return res.status(401).send('Invalid credentials');
-  }
+  // Query to fetch admin credentials from the database
+  const query = 'SELECT * FROM admin WHERE username = ?';
+  db.query(query, [username], (err, result) => {
+      if (err) {
+          console.log(err);
+          return res.status(500).send('Database error');
+      }
+
+      if (result.length === 0) {
+          return res.status(400).send('Invalid credentials');
+      }
+
+      // Compare the provided password with the stored hashed password
+      bcrypt.compare(password, result[0].password, (err, match) => {
+          if (err) {
+              console.log(err);
+              return res.status(500).send('Error comparing passwords');
+          }
+
+          if (!match) {
+              return res.status(400).send('Invalid credentials');
+          }
+
+          // Successful login, allow access to the creation page
+          res.status(200).send('Login successful');
+      });
+  });
+});
+
+// Admin signup route (for creating a new admin account)
+app.post('/create', (req, res) => {
+  const { name, phone, username, password, role } = req.body;
+
+  // Hash the password
+  bcrypt.hash(password, 10, (err, hashedPassword) => {
+      if (err) {
+          return res.status(500).send('Error hashing password');
+      }
+
+      // Insert new admin data into the database
+      const query = 'INSERT INTO admin (name, phone, username, password, role) VALUES (?, ?, ?, ?, ?)';
+      db.query(query, [name, phone, username, hashedPassword, role], (err, result) => {
+          if (err) {
+              console.log(err);
+              return res.status(500).send('Error saving data to database');
+          }
+          res.status(200).send('Admin created successfully');
+      });
+  });
+});
+
+
+// Admin login route
+app.post('/admin_login', (req, res) => {
+  const { username, password } = req.body;
+
+  // Check if username exists in the database
+  const query = 'SELECT * FROM admin WHERE username = ?';
+  db.query(query, [username], (err, result) => {
+    if (err || result.length === 0) {
+      return res.status(401).send('Invalid credentials');
+    }
+
+    // Compare the password with the hashed password stored in the database
+    bcrypt.compare(password, result[0].password, (err, isMatch) => {
+      if (err || !isMatch) {
+        return res.status(401).send('Invalid credentials');
+      }
+
+      // Create session after successful login
+      req.session.isAdminLoggedIn = true;
+      return res.redirect('/path.html'); // Redirect to path.html after successful login
+    });
+  });
+});
+
+
+// Admin dashboard route (Protected)
+app.get("/monitor", authMiddleware, (req, res) => {
+  res.sendFile(__dirname + '/path.html'); // Send the Admin Dashboard HTML 
 });
 
 // Middleware to check if admin is logged in
@@ -159,13 +237,8 @@ function authMiddleware(req, res, next) {
   if (req.session.isAdminLoggedIn) {
     return next();
   }
-  return res.status(401).send('You must log in first');
+  return res.redirect('/admin_login.html'); // Redirect to admin login page if not logged in 
 }
-
-// Admin dashboard route (Protected)
-app.get("/monitor", authMiddleware, (req, res) => {
-  res.sendFile(__dirname + '/admin_dashboard.html'); // Send the Admin Dashboard HTML
-});
 
 // Check if admin is logged in (for checking session state)
 app.get("/check-admin-login", (req, res) => {
